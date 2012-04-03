@@ -1,0 +1,20 @@
+DebugPerlAttach
+===============
+
+This project is mostly possed of a script 'debug_perl' that can be used to wrap
+up:
+
+o attaching to the perl binary with gdb
+o Running Enbugger in the attached process
+  o Attaching to a locally running socat session
+
+Thus our dependencies are:
+o a debugging version of perl
+o Enbugger
+o socat
+
+it's invoked as so: ./debug_perl PID
+
+feel free to play, then 'continue' and ctrl+c
+
+If you want to experiment, the accompanying ./test.pl prints it's pid, then simply loops
