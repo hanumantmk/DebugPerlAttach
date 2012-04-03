@@ -4,6 +4,10 @@ use strict;
 
 use File::Temp qw( tempfile );
 
+`which socat` or print "socat is a dependency\n" and exit 1;
+`which gdb` or print "gdb is a dependency\n" and exit 1;
+`perl -MEnbugger -e '0'` and print "Enbugger is a dependency\n" and exit 1;
+
 my $pid = $ARGV[0];
 
 $pid or print "Please Enter a pid to debug\n" and exit 1;
