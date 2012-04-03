@@ -1,0 +1,26 @@
+#!/usr/bin/perl -w
+
+use strict;
+
+use File::Temp qw( tempfile );
+
+my $pid = $ARGV[0];
+
+$pid or print "Please Enter a pid to debug\n" and exit 1;
+
+my $port = 50000;
+
+my ($fh, $fname) = tempfile(UNLINK => 1);
+
+print $fh <<SCRIPT
+call (void*)Perl_eval_pv((void*)Perl_get_context(),"eval{if (! \$Enbugger::DefaultDebugger) { require Enbugger; \$ENV{PERLDB_OPTS}='RemotePort=localhost:$port' } require IO::Socket::INET; close(\$DB::OUT); \$DB::OUT = \$DB::IN = IO::Socket::INET->new(Timeout => 10, PeerAddr => 'localhost:$port', Proto => 'tcp'); Enbugger->stop}; warn \$@ if \$@;",0)
+
+detach
+quit
+SCRIPT
+;
+
+close($fh) or die $!;
+
+system("gdb -q -batch -x $fname -p $pid &");
+system("socat 'TCP-LISTEN:$port,fork,reuseaddr' STDIO");
