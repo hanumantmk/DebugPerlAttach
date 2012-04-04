@@ -2,6 +2,17 @@
 
 use strict;
 
+use Getopt::Long;
+
+my $mode = 'stack-trace';
+my $port = 50000;
+
+GetOptions(
+  '--mode=s' => \$mode,
+  '--port=i' => \$port,
+  '--help|?' => sub { HELP(0) },
+) or HELP(1);
+
 use File::Temp qw( tempfile );
 
 `which socat` or print "socat is a dependency\n" and exit 1;
@@ -10,14 +21,44 @@ use File::Temp qw( tempfile );
 
 my $pid = $ARGV[0];
 
-$pid or print "Please Enter a pid to debug\n" and exit 1;
-
-my $port = 50000;
+$pid or print "Please Enter a pid to debug\n\n" and HELP(1);
 
 my ($fh, $fname) = tempfile(UNLINK => 1);
 
+my $socket_code = "IO::Socket::INET->new(Timeout => 10, PeerAddr => 'localhost:$port', Proto => 'tcp')";
+
+my %modes = (
+  debugger => <<SCRIPT
+    eval {
+      if (! \$Enbugger::DefaultDebugger) {
+	require Enbugger;
+	\$ENV{PERLDB_OPTS}='RemotePort=localhost:$port'
+      }
+
+      close(\$DB::OUT);
+      \$DB::OUT = \$DB::IN = $socket_code;
+      Enbugger->stop;
+    };
+    warn \$@ if \$@;
+SCRIPT
+  ,
+  'stack-trace' => <<SCRIPT
+    require Carp;
+    my \$out = $socket_code;
+    print \$out Carp::longmess();
+    close(\$out);
+SCRIPT
+  ,
+);
+
+exists $modes{$mode} or print "Invalid mode $mode\n\n" and HELP(1);
+
+my $command = $modes{$mode};
+$command = make_callback($command);
+$command =~ s/\n//g;
+
 print $fh <<SCRIPT
-call (void*)Perl_eval_pv((void*)Perl_get_context(),"eval{if (! \$Enbugger::DefaultDebugger) { require Enbugger; \$ENV{PERLDB_OPTS}='RemotePort=localhost:$port' } require IO::Socket::INET; close(\$DB::OUT); \$DB::OUT = \$DB::IN = IO::Socket::INET->new(Timeout => 10, PeerAddr => 'localhost:$port', Proto => 'tcp'); Enbugger->stop}; warn \$@ if \$@;",0)
+$command
 
 detach
 quit
@@ -26,5 +67,36 @@ SCRIPT
 
 close($fh) or die $!;
 
-system("gdb -q -batch -x $fname -p $pid &");
+system("gdb -q -batch -x $fname -p $pid > /dev/null &");
 system("socat 'TCP-LISTEN:$port,fork,reuseaddr' STDIO");
+
+sub HELP {
+  my $exit = shift;
+
+print <<USAGE
+$0 - [ OPTIONS ] PID
+
+Command to use gdb to attach to a running perl process and inject commands
+
+Options:
+  --mode=[stack-trace]             
+         stack-trace  returns a stack trace of the running process
+         debugger     sets up Enbugger in the target process and opens the debugger
+
+  --port=[50000]      which port to talk to the remote process on
+
+  --help|?            This help message
+USAGE
+;
+
+  exit $exit;
+}
+
+sub make_callback {
+<<SCRIPT
+call Perl_eval_pv(Perl_get_context(), "
+  require IO::Socket::INET;
+  @_
+",0)
+SCRIPT
+}

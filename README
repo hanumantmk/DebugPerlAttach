@@ -5,16 +5,30 @@ This project is mostly possed of a script 'debug_perl' that can be used to wrap
 up:
 
 o attaching to the perl binary with gdb
-o Running Enbugger in the attached process
-  o Attaching to a locally running socat session
+o Running arbitrary code in the attached process such as:
+  o Enbugger
+  o Carp::longmess
+o Attaching to a locally running socat session to receive the output
 
 Thus our dependencies are:
-o a debugging version of perl
+o gdb
 o Enbugger
 o socat
+o a multi-threaded version of perl (this could be fixed, but right now I assume
+  that API)
 
-it's invoked as so: ./debug_perl PID
+it's invoked as so: ./debug_perl -mode=[stack-trace|debugger] PID
 
 feel free to play, then 'continue' and ctrl+c
 
-If you want to experiment, the accompanying ./test.pl prints it's pid, then simply loops
+If you want to experiment, the accompanying ./test.pl prints it's pid, writes
+it to 'pid' then simply loops.  Thus:
+
+$ ./test.pl &
+[1] 26012
+$ 26012
+./debug_perl `cat pid`
+ at ./test.pl line 14
+        main::baz(1) called at ./test.pl line 10
+        main::bar(1) called at ./test.pl line 6
+        main::foo(1) called at ./test.pl line 22
