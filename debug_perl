@@ -2,7 +2,13 @@
 
 use strict;
 
+use IO::Socket::INET;
+use IO::Select;
+use IO::Handle;
+
 use Getopt::Long;
+
+STDOUT->autoflush(1);
 
 my $mode = 'stack-trace';
 my $port = 50000;
@@ -15,7 +21,6 @@ GetOptions(
 
 use File::Temp qw( tempfile );
 
-`which socat` or print "socat is a dependency\n" and exit 1;
 `which gdb` or print "gdb is a dependency\n" and exit 1;
 `perl -MEnbugger -e '0'` and print "Enbugger is a dependency\n" and exit 1;
 
@@ -67,8 +72,60 @@ SCRIPT
 
 close($fh) or die $!;
 
+my $socket = IO::Socket::INET->new(
+  LocalPort => $port,
+  Proto     => 'tcp',
+  Listen    => 1,
+  ReuseAddr => 1,
+);
+
 system("gdb -q -batch -x $fname -p $pid > /dev/null &");
-system("socat 'TCP-LISTEN:$port,fork,reuseaddr' STDIO");
+
+my @input;
+my $client;
+
+my $sel = IO::Select->new(\*STDIN, $socket);
+
+my $keep_going = 1;
+
+$SIG{INT} = sub {
+  $keep_going = 0;
+};
+
+while ($keep_going) {
+  my @ready = $sel->can_read;
+
+  foreach my $fh (@ready) {
+    if ($fh == $socket) {
+      if ($client) {
+	close $client;
+	undef($client);
+      }
+
+      $client = $socket->accept();
+      $sel->add($client);
+    } elsif ($fh == \*STDIN) {
+      push @input, read_something(\*STDIN);
+
+      if ($client) {
+	$client->send(join('', @input));
+	@input = ();
+      }
+    } elsif ($fh == $client) {
+      my $r = read_something($client);
+
+      if (defined $r) {
+	print $r;
+      } else {
+	$sel->remove($client);
+	close($client);
+	undef($client);
+      }
+    }
+  }
+}
+
+exit 0;
 
 sub HELP {
   my $exit = shift;
@@ -93,10 +150,25 @@ USAGE
 }
 
 sub make_callback {
+  s/"/\\"/g for @_;
+
 <<SCRIPT
 call Perl_eval_pv(Perl_get_context(), "
   require IO::Socket::INET;
   @_
 ",0)
 SCRIPT
+}
+
+sub read_something {
+  my $fh = shift;
+
+  my $buf;
+  my $val = $fh->sysread($buf, 4096);
+
+  if ($val) {
+    return $buf;
+  } else {
+    return undef;
+  }
 }
