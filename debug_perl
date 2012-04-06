@@ -12,127 +12,104 @@ use Getopt::Long;
 
 STDOUT->autoflush(1);
 
-my $mode = 'stack-trace';
+my $stack_trace;
+my $debugger;
+my $custom;
 my $port = 50000;
 
 GetOptions(
-  '--mode=s' => \$mode,
-  '--port=i' => \$port,
-  '--help|?' => sub { HELP(0) },
+  '--stack-trace' => \$stack_trace,
+  '--debugger'    => \$debugger,
+  '--custom=s'    => \$custom,
+  '--port=i'      => \$port,
+  '--help|?'      => sub { HELP(0) },
 ) or HELP(1);
 
-`which gdb` or print "gdb is a dependency\n" and exit 1;
-`perl -MEnbugger -e '0'` and print "Enbugger is a dependency\n" and exit 1;
+check_dependencies();
 
 my $pid = $ARGV[0];
 
 $pid or print "Please Enter a pid to debug\n\n" and HELP(1);
 
-my ($fh, $fname) = tempfile(UNLINK => 1);
+if ($debugger) {
+  run_remotely($port, <<'SCRIPT'
+    my ($socket, $port) = @_;
 
-my $socket_code = "IO::Socket::INET->new(Timeout => 10, PeerAddr => 'localhost:$port', Proto => 'tcp')";
-
-my %modes = (
-  debugger => <<SCRIPT
-    if (! \$Enbugger::DefaultDebugger) {
+    if (! $Enbugger::DefaultDebugger) {
       require Enbugger;
-      \$ENV{PERLDB_OPTS}='RemotePort=localhost:$port'
+      $ENV{PERLDB_OPTS}="RemotePort=localhost:$port";
     }
 
-    close(\$DB::OUT);
-    \$DB::OUT = \$DB::IN = $socket_code;
+    close($DB::OUT);
+    $DB::OUT = $DB::IN = $socket;
     Enbugger->stop;
 SCRIPT
-  ,
-  'stack-trace' => <<SCRIPT
-    require Carp;
-    my \$out = $socket_code;
-    print \$out Carp::longmess();
-    close(\$out);
-SCRIPT
-  ,
-);
-
-exists $modes{$mode} or print "Invalid mode $mode\n\n" and HELP(1);
-
-my $command = $modes{$mode};
-$command = make_callback($command);
-$command =~ s/\n//g;
-
-print $fh <<SCRIPT
-$command
-
-detach
-quit
-SCRIPT
-;
-
-close($fh) or die $!;
-
-my $socket = IO::Socket::INET->new(
-  LocalPort => $port,
-  Proto     => 'tcp',
-  Listen    => 1,
-  ReuseAddr => 1,
-);
-
-system("gdb -q -batch -x $fname -p $pid > /dev/null &");
-
-my @input;
-my $client;
-
-my $sel = IO::Select->new(\*STDIN, $socket);
-
-my $keep_going = 1;
-
-$SIG{INT} = sub {
-  $keep_going = 0;
-};
-
-while ($keep_going) {
-  my @ready = $sel->can_read;
-
-  foreach my $fh (@ready) {
-    if ($fh == $socket) {
-      if ($client) {
-	close $client;
-	undef($client);
-      }
-
-      $client = $socket->accept();
-      $sel->add($client);
-    } elsif ($fh == \*STDIN) {
-      push @input, read_something(\*STDIN);
-
-      if ($client) {
-	$client->send(join('', @input));
-	@input = ();
-      }
-    } elsif ($fh == $client) {
-      my $r = read_something($client);
-
-      if (defined $r) {
-	print $r;
-      } else {
-	$sel->remove($client);
-	close($client);
-	undef($client);
-      }
-    }
-  }
+  );
+} elsif ($stack_trace) {
+  run_custom($port, "require Carp; Carp::longmess()");
+} elsif ($custom) {
+  run_custom($port, $custom);
+} else {
+  print "Please provide a command to run\n\n" and HELP(1);
 }
+
+loop($port);
 
 exit 0;
 
-sub make_callback {
-  s/"/\\"/g for @_;
+sub loop {
+  my $port = shift;
 
-<<SCRIPT
-call Perl_eval_pv(Perl_get_context(), "
-  require IO::Socket::INET;
-  @_
-",0)
-SCRIPT
+  my $socket = IO::Socket::INET->new(
+    LocalPort => $port,
+    Proto     => 'tcp',
+    Listen    => 1,
+    ReuseAddr => 1,
+  );
+
+  my @input;
+  my $client;
+
+  my $sel = IO::Select->new(\*STDIN, $socket);
+
+  my $keep_going = 1;
+
+  $SIG{INT} = sub {
+    $keep_going = 0;
+  };
+
+  while ($keep_going) {
+    my @ready = $sel->can_read;
+
+    foreach my $fh (@ready) {
+      if ($fh == $socket) {
+	if ($client) {
+	  close $client;
+	  undef($client);
+	}
+
+	$client = $socket->accept();
+	$sel->add($client);
+      } elsif ($fh == \*STDIN) {
+	push @input, read_something(\*STDIN);
+
+	if ($client) {
+	  $client->send(join('', @input));
+	  @input = ();
+	}
+      } elsif ($fh == $client) {
+	my $r = read_something($client);
+
+	if (defined $r) {
+	  print $r;
+	} else {
+	  $sel->remove($client);
+	  close($client);
+	  undef($client);
+	}
+      }
+    }
+  }
 }
 
 sub read_something {
@@ -148,6 +125,51 @@ sub read_something {
   }
 }
 
+sub check_dependencies {
+  `which gdb` or print "gdb is a dependency\n" and exit 1;
+  eval { require Enbugger }; $@ and print print "Enbugger is a dependency and fails to load: $@\n" and exit 1;
+}
+
+sub run_custom {
+  my ($port, $command) = @_;
+
+  run_remotely($port, <<SCRIPT
+    my \$socket = shift;
+
+    print \$socket sub { $command }->();
+
+    close \$socket;
+SCRIPT
+  );
+}
+
+sub run_remotely {
+  my ($port, $command) = @_;
+
+  my ($fh, $fname) = tempfile(UNLINK => 1);
+
+  $command =~ s/"/\\"/g;
+
+  $command = <<SCRIPT
+call Perl_eval_pv(Perl_get_context(), "
+  require IO::Socket::INET;
+  my \$socket = IO::Socket::INET->new(Timeout => 10, PeerAddr => 'localhost:$port', Proto => 'tcp');
+
+  sub {$command}->(\$socket, $port);
+",0)
+SCRIPT
+  ;
+  $command =~ s/\n//g;
+
+  $command .= "\ndetach\nquit\n";
+
+  print $fh $command;
+
+  close($fh) or die $!;
+
+  system("gdb -q -batch -x $fname -p $pid > /dev/null &");
+}
+
 sub HELP {
   my $exit = shift;
 
@@ -157,9 +179,12 @@ $0 - [ OPTIONS ] PID
 Command to use gdb to attach to a running perl process and inject commands
 
 Options:
-  --mode=[stack-trace]             
-         stack-trace  returns a stack trace of the running process
-         debugger     sets up Enbugger in the target process and opens the debugger
+  --stack-trace       returns a stack trace of the running process
+  --debugger          sets up Enbugger in the target process and opens the
+                      debugger
+
+  --custom=CODE       Run custom code in the process, returning the result to
+                      the caller. The custom code is just a regular function
 
   --port=[50000]      which port to talk to the remote process on
 
