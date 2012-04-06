@@ -2,6 +2,8 @@
 
 use strict;
 
+use File::Temp qw( tempfile );
+
 use IO::Socket::INET;
 use IO::Select;
 use IO::Handle;
@@ -19,8 +21,6 @@ GetOptions(
   '--help|?' => sub { HELP(0) },
 ) or HELP(1);
 
-use File::Temp qw( tempfile );
-
 `which gdb` or print "gdb is a dependency\n" and exit 1;
 `perl -MEnbugger -e '0'` and print "Enbugger is a dependency\n" and exit 1;
 
@@ -34,17 +34,14 @@ my $socket_code = "IO::Socket::INET->new(Timeout => 10, PeerAddr => 'localhost:$
 
 my %modes = (
   debugger => <<SCRIPT
-    eval {
-      if (! \$Enbugger::DefaultDebugger) {
-	require Enbugger;
-	\$ENV{PERLDB_OPTS}='RemotePort=localhost:$port'
-      }
+    if (! \$Enbugger::DefaultDebugger) {
+      require Enbugger;
+      \$ENV{PERLDB_OPTS}='RemotePort=localhost:$port'
+    }
 
-      close(\$DB::OUT);
-      \$DB::OUT = \$DB::IN = $socket_code;
-      Enbugger->stop;
-    };
-    warn \$@ if \$@;
+    close(\$DB::OUT);
+    \$DB::OUT = \$DB::IN = $socket_code;
+    Enbugger->stop;
 SCRIPT
   ,
   'stack-trace' => <<SCRIPT
@@ -127,28 +124,6 @@ while ($keep_going) {
 
 exit 0;
 
-sub HELP {
-  my $exit = shift;
-
-print <<USAGE
-$0 - [ OPTIONS ] PID
-
-Command to use gdb to attach to a running perl process and inject commands
-
-Options:
-  --mode=[stack-trace]             
-         stack-trace  returns a stack trace of the running process
-         debugger     sets up Enbugger in the target process and opens the debugger
-
-  --port=[50000]      which port to talk to the remote process on
-
-  --help|?            This help message
-USAGE
-;
-
-  exit $exit;
-}
-
 sub make_callback {
   s/"/\\"/g for @_;
 
@@ -171,4 +146,26 @@ sub read_something {
   } else {
     return undef;
   }
+}
+
+sub HELP {
+  my $exit = shift;
+
+print <<USAGE
+$0 - [ OPTIONS ] PID
+
+Command to use gdb to attach to a running perl process and inject commands
+
+Options:
+  --mode=[stack-trace]             
+         stack-trace  returns a stack trace of the running process
+         debugger     sets up Enbugger in the target process and opens the debugger
+
+  --port=[50000]      which port to talk to the remote process on
+
+  --help|?            This help message
+USAGE
+;
+
+  exit $exit;
 }
