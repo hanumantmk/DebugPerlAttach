@@ -8,16 +8,15 @@ o attaching to the perl binary with gdb
 o Running arbitrary code in the attached process such as:
   o Enbugger
   o Carp::longmess
-o Attaching to a locally running socat session to receive the output
+o Attaching to a locally running socket service to receive input
 
 Thus our dependencies are:
 o gdb
 o Enbugger
-o socat
 o a multi-threaded version of perl (this could be fixed, but right now I assume
   that API)
 
-it's invoked as so: ./debug_perl -mode=[stack-trace|debugger] PID
+it's invoked as so: ./debug_perl --[debugger|stack-trace|custom] PID
 
 feel free to play, then 'continue' and ctrl+c
 
